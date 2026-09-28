@@ -41,7 +41,7 @@ def get_nbp_eur_rate():
 nbp_rate, nbp_date = get_nbp_eur_rate()
 
 st.title("🛍️ Kompleksowy Kalkulator Amazon EU/PL")
-st.write("Wpisz parametry produktu, wagę oraz koszty, aby wyliczyć optymalną cenę sprzedaży i koszty logistyki.")
+st.write("Wpisz parametry produktu, wagę oraz koszty, aby wyliczyć optymalną cenę sprzedaży lub sprawdzić marżę dla podanej ceny.")
 
 st.divider()
 
@@ -77,19 +77,32 @@ symbol = "€" if "EUR" in currency else "zł"
 
 st.divider()
 
-# Sekcja 2: Dane produktu i koszty
-st.subheader("2. Koszty zakupu, kurs i marża")
+# Sekcja 2: Tryb kalkulacji i parametry
+st.subheader("2. Tryb kalkulacji, koszty i prowizje")
+
+calc_mode = st.radio(
+    "Co chcesz wyliczyć?",
+    ["Sugerowaną cenę (na podstawie oczekiwanej marży)", "Marżę netto (na podstawie konkretnej ceny wyjściowej)"],
+    horizontal=False
+)
+
 col1, col2 = st.columns(2)
 
 with col1:
     cost_pln = st.number_input("Koszt zakupu + fracht (PLN netto)", value=120.0, step=5.0)
-    target_margin_pct = st.number_input("Oczekiwana marża netto (%)", value=20.0, step=1.0)
+    
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+        target_margin_pct = st.number_input("Oczekiwana marża netto (%)", value=20.0, step=1.0)
+        given_price = 0.0
+    else:
+        given_price = st.number_input(f"Konkretna cena wyjściowa na Amazon ({symbol})", value=49.99, step=1.0)
+        target_margin_pct = 0.0
+
     rate = st.number_input("Kurs EUR/PLN (Auto z NBP)", value=float(nbp_rate), step=0.01)
     if nbp_date:
         st.caption(f"🟢 Pobrano z NBP z dnia: {nbp_date} ({nbp_rate:.4f} PLN)")
 
 with col2:
-    # Wybór sposobu wprowadzania prowizji Amazon
     fee_type = st.radio(
         "Sposób wyliczania prowizji Amazon:",
         ["Procentowo (%)", f"Konkretna kwota ({symbol})"],
@@ -127,59 +140,67 @@ with col3:
             
         st.caption(f"📦 Cennik EuroHermes: **{calc_mfn_eur:.2f} €** ({msg_mfn})")
     else:
-        label_mfn = "Koszt własnego kuriera MFN (€)" if "EUR" in currency else "Koszt własnego kuriera MFN (zł)"
+        label_mfn = f"Koszt własnego kuriera MFN ({symbol})"
         default_mfn = 6.50 if "EUR" in currency else 25.00
         mfn_shipping = st.number_input(label_mfn, value=default_mfn, step=0.50)
 
 with col4:
-    label_fba = "Opłaty FBA (Fulfilment + Storage) (€)" if "EUR" in currency else "Opłaty FBA (Fulfilment + Storage) (zł)"
+    label_fba = f"Opłaty FBA (Fulfilment + Storage) ({symbol})"
     default_fba = 4.95 if "EUR" in currency else 21.00
     fba_logistics = st.number_input(label_fba, value=default_fba, step=0.50)
 
 # Logika przeliczania
-def calc_price(logistics_val):
+def calc_metrics(logistics_val):
     if "EUR" in currency:
         cost_in_target_curr = cost_pln / rate
-        logistics_in_target_curr = logistics_val
     else:
         cost_in_target_curr = cost_pln
-        logistics_in_target_curr = logistics_val
 
-    ppc_dec = ppc_pct / 100.0
+    logistics_in_target_curr = logistics_val
     vat_dec = vat_pct / 100.0
-    margin_dec = target_margin_pct / 100.0
+    ppc_dec = ppc_pct / 100.0
 
-    if fee_type == "Procentowo (%)":
-        fee_dec = fee_pct / 100.0
-        net_multiplier = (1.0 - fee_dec - ppc_dec - margin_dec) / (1.0 + vat_dec)
-        
-        if net_multiplier > 0:
-            price = (cost_in_target_curr + logistics_in_target_curr) / net_multiplier
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+        margin_dec = target_margin_pct / 100.0
+
+        if fee_type == "Procentowo (%)":
+            fee_dec = fee_pct / 100.0
+            net_multiplier = (1.0 - fee_dec - ppc_dec - margin_dec) / (1.0 + vat_dec)
+            price = (cost_in_target_curr + logistics_in_target_curr) / net_multiplier if net_multiplier > 0 else 0.0
+            fee = price * fee_dec
         else:
-            price = 0.0
-            
-        fee = price * fee_dec
+            fee = fee_fixed_val
+            net_multiplier = (1.0 - ppc_dec - margin_dec) / (1.0 + vat_dec)
+            price = (cost_in_target_curr + logistics_in_target_curr + fee) / net_multiplier if net_multiplier > 0 else 0.0
+
+        vat = price - (price / (1.0 + vat_dec)) if price > 0 else 0.0
+        ppc = price * ppc_dec
+        net_sales = price / (1.0 + vat_dec)
+        profit_in_target_curr = net_sales * margin_dec
+        margin_calculated_pct = target_margin_pct
+
     else:
-        # Kwotowa prowizja Amazon
-        fee = fee_fixed_val
-        net_multiplier = (1.0 - ppc_dec - margin_dec) / (1.0 + vat_dec)
-        
-        if net_multiplier > 0:
-            price = (cost_in_target_curr + logistics_in_target_curr + fee) / net_multiplier
-        else:
-            price = 0.0
+        price = given_price
+        vat = price - (price / (1.0 + vat_dec)) if price > 0 else 0.0
+        net_sales = price / (1.0 + vat_dec)
 
-    vat = price - (price / (1.0 + vat_dec)) if price > 0 else 0.0
-    ppc = price * ppc_dec
-    
-    net_sales = price / (1.0 + vat_dec)
-    profit_in_target_curr = net_sales * margin_dec
+        if fee_type == "Procentowo (%)":
+            fee = price * (fee_pct / 100.0)
+        else:
+            fee = fee_fixed_val
+
+        ppc = price * ppc_dec
+
+        # Zysk = Przychód netto - Koszt produktu - Logistyka - Prowizja - PPC
+        profit_in_target_curr = net_sales - cost_in_target_curr - logistics_in_target_curr - fee - ppc
+        margin_calculated_pct = (profit_in_target_curr / net_sales * 100.0) if net_sales > 0 else 0.0
+
     profit_pln = profit_in_target_curr * rate if "EUR" in currency else profit_in_target_curr
 
-    return price, fee, ppc, vat, profit_pln
+    return price, fee, ppc, vat, profit_in_target_curr, profit_pln, margin_calculated_pct
 
-price_mfn, fee_mfn, ppc_mfn, vat_mfn, profit_mfn_pln = calc_price(mfn_shipping)
-price_fba, fee_fba, ppc_fba, vat_fba, profit_fba_pln = calc_price(fba_logistics)
+p_mfn, fee_mfn, ppc_mfn, vat_mfn, prof_mfn_curr, prof_mfn_pln, margin_mfn = calc_metrics(mfn_shipping)
+p_fba, fee_fba, ppc_fba, vat_fba, prof_fba_curr, prof_fba_pln, margin_fba = calc_metrics(fba_logistics)
 
 st.divider()
 st.subheader("📊 Wynik Kalkulacji")
@@ -188,8 +209,13 @@ res_col1, res_col2 = st.columns(2)
 
 with res_col1:
     st.info("### Model MFN (Własny)")
-    st.markdown(f"Sugerowana cena: **{price_mfn:.2f} {symbol}**")
-    st.caption(f"• Zysk kwotowy: **{profit_mfn_pln:.2f} PLN**")
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+        st.markdown(f"Sugerowana cena: **{p_mfn:.2f} {symbol}**")
+    else:
+        st.markdown(f"Cena sprzedaży: **{p_mfn:.2f} {symbol}**")
+    
+    st.markdown(f"• **Marża netto: {margin_mfn:.2f}%**")
+    st.caption(f"• Zysk kwotowy: **{prof_mfn_pln:.2f} PLN** ({prof_mfn_curr:.2f} {symbol})")
     st.caption(f"• Kurier MFN: {mfn_shipping:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_mfn:.2f} {symbol}")
     st.caption(f"• Reklamy PPC: {ppc_mfn:.2f} {symbol}")
@@ -197,14 +223,19 @@ with res_col1:
 
 with res_col2:
     st.success("### Model FBA (Amazon)")
-    st.markdown(f"Sugerowana cena: **{price_fba:.2f} {symbol}**")
-    st.caption(f"• Zysk kwotowy: **{profit_fba_pln:.2f} PLN**")
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+        st.markdown(f"Sugerowana cena: **{p_fba:.2f} {symbol}**")
+    else:
+        st.markdown(f"Cena sprzedaży: **{p_fba:.2f} {symbol}**")
+        
+    st.markdown(f"• **Marża netto: {margin_fba:.2f}%**")
+    st.caption(f"• Zysk kwotowy: **{prof_fba_pln:.2f} PLN** ({prof_fba_curr:.2f} {symbol})")
     st.caption(f"• Opłaty FBA: {fba_logistics:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_fba:.2f} {symbol}")
     st.caption(f"• Reklamy PPC: {ppc_fba:.2f} {symbol}")
     st.caption(f"• Podatek VAT ({vat_pct:.0f}%): {vat_fba:.2f} {symbol}")
 
 if fba_logistics < mfn_shipping:
-    st.success("💡 **Wniosek:** Model FBA jest tańszy logistycznie! Pozwala uzyskać założoną marżę przy niższej cenie wyjściowej.")
+    st.success("💡 **Wniosek:** Model FBA jest tańszy logistycznie dla tego produktu!")
 else:
-    st.warning("💡 **Wniosek:** Model MFN wychodzi taniej na logistyce dla tego produktu.")
+    st.warning("💡 **Wniosek:** Model MFN jest tańszy logistycznie dla tego produktu!")
