@@ -122,7 +122,7 @@ with col2:
 st.divider()
 
 # Sekcja 3: Logistyka i Cennik Kurierów
-st.subheader("3. Koszty logistyki i kalkulator wagowy")
+st.subheader("3. Koszty logistyki, FBA i opłaty sezonowe")
 
 use_auto_mfn = st.checkbox("Automatycznie przelicz koszt MFN na podstawie wagi (EuroHermes DE)", value=True)
 
@@ -145,9 +145,28 @@ with col3:
         mfn_shipping = st.number_input(label_mfn, value=default_mfn, step=0.50)
 
 with col4:
-    label_fba = f"Opłaty FBA (Fulfilment + Storage) ({symbol})"
+    label_fba = f"Podstawowa opłata FBA (Fulfilment) ({symbol})"
     default_fba = 4.95 if "EUR" in currency else 21.00
-    fba_logistics = st.number_input(label_fba, value=default_fba, step=0.50)
+    fba_base_cost = st.number_input(label_fba, value=default_fba, step=0.50)
+
+    # Opcje dopłat FBA
+    st.markdown("**Ustawienia dopłat FBA (Niemcy Q4/Q1):**")
+    enable_seasonal_fee = st.checkbox("Dopłata sezonowa FBA (15.10.2026 – 14.01.2027)", value=("Niemcy" in country))
+    
+    default_seasonal_val = 0.27 if "EUR" in currency else (0.27 * nbp_rate)
+    if enable_seasonal_fee:
+        seasonal_fee_val = st.number_input(f"Wysokość dopłaty sezonowej ({symbol})", value=float(f"{default_seasonal_val:.2f}"), step=0.05)
+    else:
+        seasonal_fee_val = 0.0
+
+    enable_fuel_surcharge = st.checkbox("Dopłata paliwowo-logistyczna (1.5%)", value=True)
+
+# Kalkulacja całkowitej opłaty FBA
+fba_fuel_fee = (fba_base_cost * 0.015) if enable_fuel_surcharge else 0.0
+total_fba_logistics = fba_base_cost + seasonal_fee_val + fba_fuel_fee
+
+if enable_seasonal_fee or enable_fuel_surcharge:
+    st.caption(f"ℹ️ **Łączny koszt FBA:** {total_fba_logistics:.2f} {symbol} (Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo 1.5%: {fba_fuel_fee:.2f})")
 
 # Logika przeliczania
 def calc_metrics(logistics_val):
@@ -200,7 +219,7 @@ def calc_metrics(logistics_val):
     return price, fee, ppc, vat, profit_in_target_curr, profit_pln, margin_calculated_pct
 
 p_mfn, fee_mfn, ppc_mfn, vat_mfn, prof_mfn_curr, prof_mfn_pln, margin_mfn = calc_metrics(mfn_shipping)
-p_fba, fee_fba, ppc_fba, vat_fba, prof_fba_curr, prof_fba_pln, margin_fba = calc_metrics(fba_logistics)
+p_fba, fee_fba, ppc_fba, vat_fba, prof_fba_curr, prof_fba_pln, margin_fba = calc_metrics(total_fba_logistics)
 
 st.divider()
 st.subheader("📊 Wynik Kalkulacji")
@@ -230,12 +249,13 @@ with res_col2:
         
     st.markdown(f"• **Marża netto: {margin_fba:.2f}%**")
     st.caption(f"• Zysk kwotowy: **{prof_fba_pln:.2f} PLN** ({prof_fba_curr:.2f} {symbol})")
-    st.caption(f"• Opłaty FBA: {fba_logistics:.2f} {symbol}")
+    st.caption(f"• Opłaty FBA łącznik: **{total_fba_logistics:.2f} {symbol}**")
+    st.caption(f"  └ Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo 1.5%: {fba_fuel_fee:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_fba:.2f} {symbol}")
     st.caption(f"• Reklamy PPC: {ppc_fba:.2f} {symbol}")
     st.caption(f"• Podatek VAT ({vat_pct:.0f}%): {vat_fba:.2f} {symbol}")
 
-if fba_logistics < mfn_shipping:
+if total_fba_logistics < mfn_shipping:
     st.success("💡 **Wniosek:** Model FBA jest tańszy logistycznie dla tego produktu!")
 else:
     st.warning("💡 **Wniosek:** Model MFN jest tańszy logistycznie dla tego produktu!")
