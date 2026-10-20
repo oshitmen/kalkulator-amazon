@@ -150,7 +150,7 @@ with col4:
     fba_base_cost = st.number_input(label_fba, value=default_fba, step=0.50)
 
     # Opcje dopłat FBA
-    st.markdown("**Ustawienia dopłat FBA (Niemcy Q4/Q1):**")
+    st.markdown("**Ustawienia dopłat FBA:**")
     enable_seasonal_fee = st.checkbox("Dopłata sezonowa FBA (15.10.2026 – 14.01.2027)", value=("Niemcy" in country))
     
     default_seasonal_val = 0.27 if "EUR" in currency else (0.27 * nbp_rate)
@@ -159,14 +159,18 @@ with col4:
     else:
         seasonal_fee_val = 0.0
 
-    enable_fuel_surcharge = st.checkbox("Dopłata paliwowo-logistyczna (1.5%)", value=True)
+    enable_fuel_surcharge = st.checkbox("Dopłata paliwowo-logistyczna FBA", value=True)
+    if enable_fuel_surcharge:
+        fuel_surcharge_pct = st.number_input("Stawka dopłaty paliwowej (%)", value=2.0, step=0.1, help="Od 2 listopada 2026 r. stawka wzrasta z 1,5% do 2,0%.")
+    else:
+        fuel_surcharge_pct = 0.0
 
 # Kalkulacja całkowitej opłaty FBA
-fba_fuel_fee = (fba_base_cost * 0.015) if enable_fuel_surcharge else 0.0
+fba_fuel_fee = fba_base_cost * (fuel_surcharge_pct / 100.0)
 total_fba_logistics = fba_base_cost + seasonal_fee_val + fba_fuel_fee
 
 if enable_seasonal_fee or enable_fuel_surcharge:
-    st.caption(f"ℹ️ **Łączny koszt FBA:** {total_fba_logistics:.2f} {symbol} (Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo 1.5%: {fba_fuel_fee:.2f})")
+    st.caption(f"ℹ️ **Łączny koszt FBA:** {total_fba_logistics:.2f} {symbol} (Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo {fuel_surcharge_pct:.1f}%: {fba_fuel_fee:.2f})")
 
 # Logika przeliczania
 def calc_metrics(logistics_val):
@@ -249,8 +253,8 @@ with res_col2:
         
     st.markdown(f"• **Marża netto: {margin_fba:.2f}%**")
     st.caption(f"• Zysk kwotowy: **{prof_fba_pln:.2f} PLN** ({prof_fba_curr:.2f} {symbol})")
-    st.caption(f"• Opłaty FBA łącznik: **{total_fba_logistics:.2f} {symbol}**")
-    st.caption(f"  └ Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo 1.5%: {fba_fuel_fee:.2f} {symbol}")
+    st.caption(f"• Opłaty FBA łącznie: **{total_fba_logistics:.2f} {symbol}**")
+    st.caption(f"  └ Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo ({fuel_surcharge_pct:.1f}%): {fba_fuel_fee:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_fba:.2f} {symbol}")
     st.caption(f"• Reklamy PPC: {ppc_fba:.2f} {symbol}")
     st.caption(f"• Podatek VAT ({vat_pct:.0f}%): {vat_fba:.2f} {symbol}")
