@@ -41,7 +41,7 @@ def get_nbp_eur_rate():
 nbp_rate, nbp_date = get_nbp_eur_rate()
 
 st.title("🛍️ Kompleksowy Kalkulator Amazon EU/PL")
-st.write("Wpisz parametry produktu, wagę oraz koszty, aby wyliczyć optymalną cenę sprzedaży lub sprawdzić marżę dla podanej ceny.")
+st.write("Wpisz parametry produktu, wagę oraz koszty, aby wyliczyć optymalną cenę sprzedaży lub sprawdzić marżę produktową.")
 
 st.divider()
 
@@ -82,7 +82,7 @@ st.subheader("2. Tryb kalkulacji, koszty i prowizje")
 
 calc_mode = st.radio(
     "Co chcesz wyliczyć?",
-    ["Sugerowaną cenę (na podstawie oczekiwanej marży)", "Marżę netto (na podstawie konkretnej ceny wyjściowej)"],
+    ["Sugerowaną cenę (na podstawie oczekiwanej marży produktowej)", "Marżę produktową (na podstawie konkretnej ceny wyjściowej)"],
     horizontal=False
 )
 
@@ -91,8 +91,8 @@ col1, col2 = st.columns(2)
 with col1:
     cost_pln = st.number_input("Koszt zakupu + fracht (PLN netto)", value=120.0, step=5.0)
     
-    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
-        target_margin_pct = st.number_input("Oczekiwana marża netto (%)", value=20.0, step=1.0)
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży produktowej)":
+        target_margin_pct = st.number_input("Oczekiwana marża produktowa (%)", value=30.0, step=1.0, help="(Cena netto - Koszt netto) / Cena netto")
         given_price = 0.0
     else:
         given_price = st.number_input(f"Konkretna cena wyjściowa na Amazon ({symbol})", value=49.99, step=1.0)
@@ -161,7 +161,7 @@ with col4:
 
     enable_fuel_surcharge = st.checkbox("Dopłata paliwowo-logistyczna FBA", value=True)
     if enable_fuel_surcharge:
-        fuel_surcharge_pct = st.number_input("Stawka dopłaty paliwowej (%)", value=2.0, step=0.1, help="Od 2 listopada 2026 r. stawka wzrasta z 1,5% do 2,0%.")
+        fuel_surcharge_pct = st.number_input("Stawka dopłaty paliwowej (%)", value=2.0, step=0.1, help="Stawka aktualizowana do 2,0%.")
     else:
         fuel_surcharge_pct = 0.0
 
@@ -172,7 +172,8 @@ total_fba_logistics = fba_base_cost + seasonal_fee_val + fba_fuel_fee
 if enable_seasonal_fee or enable_fuel_surcharge:
     st.caption(f"ℹ️ **Łączny koszt FBA:** {total_fba_logistics:.2f} {symbol} (Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo {fuel_surcharge_pct:.1f}%: {fba_fuel_fee:.2f})")
 
-# Logika przeliczania
+# Logika przeliczania według nowego wzoru marży produktowej:
+# Marża = (Cena netto - Koszt netto) / Cena netto
 def calc_metrics(logistics_val):
     if "EUR" in currency:
         cost_in_target_curr = cost_pln / rate
@@ -183,29 +184,61 @@ def calc_metrics(logistics_val):
     vat_dec = vat_pct / 100.0
     ppc_dec = ppc_pct / 100.0
 
-    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży produktowej)":
         margin_dec = target_margin_pct / 100.0
+        
+        # Zgodnie ze wzorem: margin = (net_sales - cost) / net_sales => net_sales = cost / (1 - margin)
+        if margin_dec >= 1.0:
+            margin_dec = 0.99  # zabezpieczenie przed dzieleniem przez zero
+            
+        net_sales = cost_in_target_curr / (1.0 - margin_dec)
+        
+        # Cena brutto musi pokryć net_sales, ale uwzględnić też pozostałe koszty (logistyka, prowizja, PPC) pokrywane z przychodu
+        # Przychód netto ze sprzedaży (net_sales) musi być na tyle wysoki, by po odjęciu prowizji i PPC oraz logistyki spiąć budżet, 
+        # LUB traktujemy marżę jako narzut na koszt zakupu, a koszty operacyjne doliczamy do ceny:
+        # Cena brutto = (net_sales + logistics_in_target_curr + fee + ppc_costs) * (1 + vat_dec) ? 
+        # Sprawdźmy standardowe podejście handlowe: 
+        # Skoro net_sales = cost / (1 - margin), to cena netto ma pokryć koszt i dać marżę. 
+        # Dodatkowo logistyka, prowizja i PPC to koszty dodatkowe. 
+        # Rozwiążmy to równanie liniowe dla ceny brutto (price):
+        # net_sales = price / (1 + vat_dec)
+        # fee = price * (fee_pct / 100.0) lub fee_fixed_val
+        # ppc = price * ppc_dec
+        # net_sales - cost = margin * net_sales  =>  net_sales * (1 - margin) = cost  =>  net_sales = cost / (1 - margin)
+        # Z drugiej strony z bilansu przychodów netto: net_sales = cost + logistics + fee_netto + ppc_netto + zysk? 
+        # Najprościej: Cena netto (net_sales) = (Koszt zakupu + Logistyka) / (1 - Marża - Prowizja% - PPC%) [jeśli prowizja i PPC są % od ceny netto]
+        # Ponieważ prowizja i PPC są zwykle od ceny brutto, przeliczmy to precyzyjnie:
+        
+        fee_dec = (fee_pct / 100.0) if fee_type == "Procentowo (%)" else 0.0
+        fixed_fee = fee_fixed_val if fee_type != "Procentowo (%)" else 0.0
 
-        if fee_type == "Procentowo (%)":
-            fee_dec = fee_pct / 100.0
-            net_multiplier = (1.0 - fee_dec - ppc_dec - margin_dec) / (1.0 + vat_dec)
-            price = (cost_in_target_curr + logistics_in_target_curr) / net_multiplier if net_multiplier > 0 else 0.0
-            fee = price * fee_dec
+        # Równanie na cenę brutto (price):
+        # net_sales = price / (1 + vat_dec)
+        # cost = net_sales * (1 - margin_dec) -> cost = (price / (1 + vat_dec)) * (1 - margin_dec)
+        # Ale z drugiej strony cenę tworzą koszty: 
+        # price / (1 + vat_dec) [net_sales] = cost + logistics + fee + ppc ...
+        # Skoro net_sales = cost / (1 - margin_dec), to:
+        # (price / (1 + vat_dec)) = cost / (1 - margin_dec) + logistics + (price * fee_dec + fixed_fee) + (price * ppc_dec)
+        # Przekształcamy do wyznaczenia price:
+        # price * ( 1/(1+vat_dec) - fee_dec - ppc_dec ) = (cost / (1 - margin_dec)) + logistics + fixed_fee
+        
+        denominator = (1.0 / (1.0 + vat_dec)) - fee_dec - ppc_dec
+        if denominator > 0:
+            price = ((cost_in_target_curr / (1.0 - margin_dec)) + logistics_in_target_curr + fixed_fee) / denominator
         else:
-            fee = fee_fixed_val
-            net_multiplier = (1.0 - ppc_dec - margin_dec) / (1.0 + vat_dec)
-            price = (cost_in_target_curr + logistics_in_target_curr + fee) / net_multiplier if net_multiplier > 0 else 0.0
+            price = 0.0
 
         vat = price - (price / (1.0 + vat_dec)) if price > 0 else 0.0
+        net_sales = price / (1.0 + vat_dec) if price > 0 else 0.0
+        fee = (price * fee_dec) if fee_type == "Procentowo (%)" else fixed_fee
         ppc = price * ppc_dec
-        net_sales = price / (1.0 + vat_dec)
-        profit_in_target_curr = net_sales * margin_dec
-        margin_calculated_pct = target_margin_pct
+        
+        calculated_margin_pct = target_m_pct = target_margin_pct
 
     else:
         price = given_price
         vat = price - (price / (1.0 + vat_dec)) if price > 0 else 0.0
-        net_sales = price / (1.0 + vat_dec)
+        net_sales = price / (1.0 + vat_dec) if price > 0 else 0.0
 
         if fee_type == "Procentowo (%)":
             fee = price * (fee_pct / 100.0)
@@ -214,13 +247,17 @@ def calc_metrics(logistics_val):
 
         ppc = price * ppc_dec
 
-        # Zysk = Przychód netto - Koszt produktu - Logistyka - Prowizja - PPC
-        profit_in_target_curr = net_sales - cost_in_target_curr - logistics_in_target_curr - fee - ppc
-        margin_calculated_pct = (profit_in_target_curr / net_sales * 100.0) if net_sales > 0 else 0.0
+        # Wyliczenie marży produktowej ze wzoru użytkownika: (cena sprzedaży netto - cena zakupu netto) / cena sprzedaży netto
+        if net_sales > 0:
+            calculated_margin_pct = ((net_sales - cost_in_target_curr) / net_sales) * 100.0
+        else:
+            calculated_margin_pct = 0.0
 
+    # Kwotowy zysk netto operacyjny po wszystkich kosztach
+    profit_in_target_curr = net_sales - cost_in_target_curr - logistics_in_target_curr - fee - ppc
     profit_pln = profit_in_target_curr * rate if "EUR" in currency else profit_in_target_curr
 
-    return price, fee, ppc, vat, profit_in_target_curr, profit_pln, margin_calculated_pct
+    return price, fee, ppc, vat, profit_in_target_curr, profit_pln, calculated_margin_pct
 
 p_mfn, fee_mfn, ppc_mfn, vat_mfn, prof_mfn_curr, prof_mfn_pln, margin_mfn = calc_metrics(mfn_shipping)
 p_fba, fee_fba, ppc_fba, vat_fba, prof_fba_curr, prof_fba_pln, margin_fba = calc_metrics(total_fba_logistics)
@@ -232,13 +269,13 @@ res_col1, res_col2 = st.columns(2)
 
 with res_col1:
     st.info("### Model MFN (Własny)")
-    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży produktowej)":
         st.markdown(f"Sugerowana cena: **{p_mfn:.2f} {symbol}**")
     else:
         st.markdown(f"Cena sprzedaży: **{p_mfn:.2f} {symbol}**")
     
-    st.markdown(f"• **Marża netto: {margin_mfn:.2f}%**")
-    st.caption(f"• Zysk kwotowy: **{prof_mfn_pln:.2f} PLN** ({prof_mfn_curr:.2f} {symbol})")
+    st.markdown(f"• **Marża produktowa: {margin_mfn:.2f}%**")
+    st.caption(f"• Zysk operacyjny: **{prof_mfn_pln:.2f} PLN** ({prof_mfn_curr:.2f} {symbol})")
     st.caption(f"• Kurier MFN: {mfn_shipping:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_mfn:.2f} {symbol}")
     st.caption(f"• Reklamy PPC: {ppc_mfn:.2f} {symbol}")
@@ -246,13 +283,13 @@ with res_col1:
 
 with res_col2:
     st.success("### Model FBA (Amazon)")
-    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży)":
+    if calc_mode == "Sugerowaną cenę (na podstawie oczekiwanej marży produktowej)":
         st.markdown(f"Sugerowana cena: **{p_fba:.2f} {symbol}**")
     else:
         st.markdown(f"Cena sprzedaży: **{p_fba:.2f} {symbol}**")
         
-    st.markdown(f"• **Marża netto: {margin_fba:.2f}%**")
-    st.caption(f"• Zysk kwotowy: **{prof_fba_pln:.2f} PLN** ({prof_fba_curr:.2f} {symbol})")
+    st.markdown(f"• **Marża produktowa: {margin_fba:.2f}%**")
+    st.caption(f"• Zysk operacyjny: **{prof_fba_pln:.2f} PLN** ({prof_fba_curr:.2f} {symbol})")
     st.caption(f"• Opłaty FBA łącznie: **{total_fba_logistics:.2f} {symbol}**")
     st.caption(f"  └ Podstawa: {fba_base_cost:.2f} | Sezonowa: {seasonal_fee_val:.2f} | Paliwo ({fuel_surcharge_pct:.1f}%): {fba_fuel_fee:.2f} {symbol}")
     st.caption(f"• Prowizja Amazon: {fee_fba:.2f} {symbol}")
